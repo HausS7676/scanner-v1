@@ -26,29 +26,84 @@ def safe_float(val):
 def generate_expert_summary(ticker_name, comp_info, fin_df, cons_data, tech, inv_detail_df):
     summary = f"### 💡 AI 트레이딩 전문가의 '{ticker_name}' 초보자 맞춤 브리핑\n\n"
     
-    summary += f"**1. 이 회사는 뭐하는 곳인가요? (종목/섹터 설명)**\n"
-    summary += f"> {comp_info.get('summary', '기업 설명이 존재하지 않습니다.')}\n\n"
-    
-    summary += f"**2. 돈은 잘 벌고 있나요? (펀더멘털/실적 분석)**\n"
+    summary += f"**1. 돈은 잘 벌고 있나요? (펀더멘털/실적 분석)**\n"
     if not fin_df.empty and '영업이익' in fin_df.index:
-        recent_op = safe_float(fin_df.loc['영업이익'].iloc[-1])
-        if recent_op > 0:
-            summary += f"> 최근 실적 기준으로 **영업이익 흑자**를 기록 중입니다. 돈을 잘 벌고 있는 튼튼한 기업입니다.\n"
+        op_data = fin_df.loc['영업이익'].dropna()
+        if len(op_data) >= 2:
+            recent_op = safe_float(op_data.iloc[-1])
+            prev_op = safe_float(op_data.iloc[-2])
+            recent_year = op_data.index[-1]
+            prev_year = op_data.index[-2]
+            
+            diff = recent_op - prev_op
+            growth_rate = (diff / abs(prev_op)) * 100 if prev_op != 0 else 0
+                
+            if recent_op > 0:
+                summary += f"> 최근 실적({recent_year} 기준)으로 **영업이익 {recent_op:,.0f}억 원(흑자)**을 기록 중입니다. "
+            else:
+                summary += f"> 최근 실적({recent_year} 기준)으로 **영업이익 {recent_op:,.0f}억 원(적자)**을 기록 중입니다. "
+                
+            if diff > 0:
+                summary += f"이전 기간({prev_year}) 대비 **{diff:,.0f}억 원(+{growth_rate:.1f}%) 증가**하며 실적이 개선되고 있습니다.\n"
+            elif diff < 0:
+                summary += f"이전 기간({prev_year}) 대비 **{abs(diff):,.0f}억 원({growth_rate:.1f}%) 감소**하며 실적이 악화되고 있습니다.\n"
+            else:
+                summary += f"이전 기간과 비슷한 수준의 실적을 유지하고 있습니다.\n"
         else:
-            summary += f"> 최근 실적 기준으로 **영업이익 적자**를 기록 중입니다. 실적 턴어라운드가 필요한 상황이므로 투자에 주의가 필요합니다.\n"
+            recent_op = safe_float(op_data.iloc[-1]) if not op_data.empty else 0
+            if recent_op > 0:
+                summary += f"> 최근 실적 기준으로 **영업이익 {recent_op:,.0f}억 원(흑자)**을 기록 중입니다. 돈을 잘 벌고 있는 튼튼한 기업입니다.\n"
+            else:
+                summary += f"> 최근 실적 기준으로 **영업이익 {recent_op:,.0f}억 원(적자)**을 기록 중입니다. 실적 턴어라운드가 필요한 상황입니다.\n"
     else:
         summary += f"> 기업의 재무/실적 데이터를 현재 확인할 수 없습니다.\n"
     
-    summary += f"\n**3. 최근 주가는 왜 이런 흐름을 보일까요? (모멘텀 및 지속가능성)**\n"
+    summary += f"\n**2. 최근 주가는 왜 이런 흐름을 보일까요? (모멘텀 및 지속가능성)**\n"
     if not inv_detail_df.empty:
-        recent_for = inv_detail_df['외국인_누적'].iloc[-1] - inv_detail_df['외국인_누적'].iloc[-20] if len(inv_detail_df) >= 20 else 0
-        recent_ins = inv_detail_df['기관_누적'].iloc[-1] - inv_detail_df['기관_누적'].iloc[-20] if len(inv_detail_df) >= 20 else 0
-        if recent_for > 0 and recent_ins > 0:
-            summary += "> 최근 한 달간 **외국인과 기관이 동시에 매수**하고 있습니다! 큰 손들이 들어오고 있다는 것은 주가 상승의 강력한 원동력이 되며, 단기간 상승세가 지속될 확률이 높습니다.\n"
-        elif recent_for > 0 or recent_ins > 0:
-            summary += "> 외국인 또는 기관 중 한 주체가 매수세를 보이고 있습니다. 긍정적인 신호지만, 양매수보다는 힘이 약할 수 있습니다.\n"
+        def get_consecutive_days(series):
+            if len(series) == 0: return 0, 0, "관망"
+            last_val = series.iloc[-1]
+            days, total = 0, 0
+            if last_val > 0:
+                for val in reversed(series):
+                    if val > 0: days += 1; total += val
+                    else: break
+                return days, total, "순매수"
+            elif last_val < 0:
+                for val in reversed(series):
+                    if val < 0: days += 1; total += val
+                    else: break
+                return days, total, "순매도"
+            return 0, 0, "관망"
+
+        for_series = inv_detail_df.get('외국인합계', pd.Series(dtype=float))
+        ins_series = inv_detail_df.get('기관합계', pd.Series(dtype=float))
+        
+        for_msg, ins_msg = "", ""
+        if not for_series.empty:
+            f_days, f_tot, f_type = get_consecutive_days(for_series)
+            if f_days > 0:
+                for_msg = f"외국인은 최근 **{f_days}거래일 연속 {f_tot/1e8:,.0f}억 원을 {f_type}**하고 있습니다. "
+                
+        if not ins_series.empty:
+            i_days, i_tot, i_type = get_consecutive_days(ins_series)
+            if i_days > 0:
+                ins_msg = f"기관은 최근 **{i_days}거래일 연속 {i_tot/1e8:,.0f}억 원을 {i_type}**하고 있습니다."
+                
+        if for_msg or ins_msg:
+            summary += f"> {for_msg}{ins_msg}\n"
+            
+            recent_for = inv_detail_df['외국인_누적'].iloc[-1] - inv_detail_df['외국인_누적'].iloc[-20] if len(inv_detail_df) >= 20 else 0
+            recent_ins = inv_detail_df['기관_누적'].iloc[-1] - inv_detail_df['기관_누적'].iloc[-20] if len(inv_detail_df) >= 20 else 0
+            
+            if recent_for > 0 and recent_ins > 0:
+                summary += "> 전반적인 한 달 흐름에서도 **외국인과 기관이 쌍끌이 매수** 중이므로 수급 모멘텀이 매우 강력합니다.\n"
+            elif recent_for < 0 and recent_ins < 0:
+                summary += "> 전반적인 한 달 흐름에서도 **외국인과 기관이 쌍끌이 매도** 중이므로 수급 부담이 큰 상황입니다.\n"
+            else:
+                summary += "> 한 달 기준으로는 두 주체의 방향성이 엇갈리고 있으니 단기 수급 변화에 주의하세요.\n"
         else:
-            summary += "> 외국인과 기관의 뚜렷한 매수세가 보이지 않습니다. 개인들만 사고 있다면 주가 상승이 금방 꺾일 수 있으니 주의하세요.\n"
+            summary += "> 외국인과 기관의 뚜렷한 연속 매수/매도세가 보이지 않습니다.\n"
     else:
         summary += "> 최근 수급 동향을 파악할 수 없습니다.\n"
         
@@ -60,7 +115,7 @@ def generate_expert_summary(ticker_name, comp_info, fin_df, cons_data, tech, inv
         else:
             summary += "> 차트상 뚜렷한 방향성이 없는 혼조세입니다.\n"
             
-    summary += f"\n**4. 초보자를 위한 투자 전략 요약**\n"
+    summary += f"\n**3. 초보자를 위한 투자 전략 요약**\n"
     if tech:
         rsi = tech['RSI']
         if rsi > 70:
