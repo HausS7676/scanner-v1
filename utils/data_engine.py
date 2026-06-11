@@ -519,3 +519,77 @@ def get_etf_holdings(ticker):
         return holdings[:10]
     except:
         return holdings
+
+@st.cache_data(ttl=300)
+def get_market_themes():
+    """네이버 금융 테마 페이지에서 상위 테마 목록을 가져옵니다."""
+    url = "https://finance.naver.com/sise/theme.naver"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        html = res.content.decode('euc-kr', 'replace')
+        soup = BeautifulSoup(html, "lxml")
+        
+        themes = []
+        table = soup.find('table', {'class': 'type_1 theme'})
+        if table:
+            for tr in table.find_all('tr'):
+                tds = tr.find_all('td')
+                if len(tds) >= 3:
+                    theme_name = tds[0].text.strip()
+                    link = tds[0].find('a')['href'] if tds[0].find('a') else ''
+                    updown_text = tds[1].text.strip()
+                    try:
+                        updown = float(updown_text.replace('%', '').replace('+', ''))
+                    except:
+                        updown = 0.0
+                    
+                    themes.append({
+                        'Theme': theme_name,
+                        'Change': updown,
+                        'Link': 'https://finance.naver.com' + link
+                    })
+        return pd.DataFrame(themes)
+    except Exception as e:
+        print(f"Error fetching themes: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def get_theme_stocks(theme_url, top_n=5):
+    """특정 테마 URL에서 등락률 상위 N개 종목을 가져옵니다."""
+    try:
+        res = requests.get(theme_url, headers=HEADERS, timeout=10)
+        html = res.content.decode('euc-kr', 'replace')
+        soup = BeautifulSoup(html, "lxml")
+        
+        stocks = []
+        table = soup.find('table', {'class': 'type_5'})
+        if table:
+            for tr in table.find_all('tr'):
+                tds = tr.find_all('td')
+                if len(tds) >= 4:
+                    name_tag = tds[0].find('a')
+                    if name_tag:
+                        name = name_tag.text.strip()
+                        ticker = name_tag['href'].split('code=')[-1]
+                        price_text = tds[1].text.strip().replace(',', '')
+                        change_pct_text = tds[3].text.strip().replace('%', '').replace('+', '')
+                        
+                        try: price = int(price_text)
+                        except: price = 0
+                        
+                        try: change_pct = float(change_pct_text)
+                        except: change_pct = 0.0
+                        
+                        stocks.append({
+                            'Name': name,
+                            'Ticker': ticker,
+                            'Price': price,
+                            'Change_Pct': change_pct
+                        })
+        df = pd.DataFrame(stocks)
+        if not df.empty:
+            df = df.sort_values('Change_Pct', ascending=False).head(top_n).reset_index(drop=True)
+        return df
+    except Exception as e:
+        print(f"Error fetching theme stocks: {e}")
+        return pd.DataFrame()
