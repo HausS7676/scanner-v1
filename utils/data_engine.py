@@ -571,8 +571,8 @@ def get_theme_stocks(theme_url, top_n=5):
                     if name_tag:
                         name = name_tag.text.strip()
                         ticker = name_tag['href'].split('code=')[-1]
-                        price_text = tds[1].text.strip().replace(',', '')
-                        change_pct_text = tds[3].text.strip().replace('%', '').replace('+', '')
+                        price_text = tds[2].text.strip().replace(',', '')
+                        change_pct_text = tds[4].text.strip().replace('%', '').replace('+', '')
                         
                         try: price = int(price_text)
                         except: price = 0
