@@ -142,12 +142,10 @@ for idx, row in themes_df.iterrows():
         sign = "+" if theme_change > 0 else ""
         
         # 카드 헤더 HTML
-        header_html = f"""
-<div class="theme-header">
-    <span class="theme-title">#{idx+1} {theme_name}</span>
-    <span class="theme-avg {color_class}">{sign}{theme_change:.2f}%</span>
-</div>
-"""
+        header_html = f"""<div class="theme-header">
+<span class="theme-title">#{idx+1} {theme_name}</span>
+<span class="theme-avg {color_class}">{sign}{theme_change:.2f}%</span>
+</div>"""
         
         # 주식 목록 HTML 생성
         with st.spinner(f"'{theme_name}' 로딩..."):
@@ -164,28 +162,24 @@ for idx, row in themes_df.iterrows():
                 s_color = "text-red" if s_change > 0 else "text-blue" if s_change < 0 else "text-gray"
                 s_sign = "+" if s_change > 0 else ""
                 
-                stocks_html += f"""
-<div class="stock-row">
-    <div>
-        <div class="stock-name">{s_name}</div>
-        <div class="stock-ticker">{s_ticker}</div>
-    </div>
-    <div style="text-align: right;">
-        <div class="stock-price">{s_price:,}원</div>
-        <div class="{s_color}" style="font-size: 0.85rem; font-weight: 600;">{s_sign}{s_change:.2f}%</div>
-    </div>
+                stocks_html += f"""<div class="stock-row">
+<div>
+<div class="stock-name">{s_name}</div>
+<div class="stock-ticker">{s_ticker}</div>
 </div>
-"""
+<div style="text-align: right;">
+<div class="stock-price">{s_price:,}원</div>
+<div class="{s_color}" style="font-size: 0.85rem; font-weight: 600;">{s_sign}{s_change:.2f}%</div>
+</div>
+</div>"""
         else:
             stocks_html = "<div style='color:#94a3b8; font-size:0.85rem; text-align:center; padding:1rem;'>종목 데이터를 불러올 수 없습니다.</div>"
             
-        card_html = f"""
-<div class="theme-card">
-    {header_html}
-    <div style="margin-top: 0.5rem;">
-        {stocks_html}
-    </div>
+        card_html = f"""<div class="theme-card">
+{header_html}
+<div style="margin-top: 0.5rem;">
+{stocks_html}
 </div>
-"""
+</div>"""
         
         st.markdown(card_html, unsafe_allow_html=True)
