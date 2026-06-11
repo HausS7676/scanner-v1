@@ -121,7 +121,7 @@ def analyze_technical(ticker, base_date):
         return '오류', 0
 
 from utils.data_engine import get_detailed_investor_flow
-
+from utils.ui_components import render_detail_analysis
 ########################################
 # 4. 종합 점수 계산 및 추천 순위
 ########################################
@@ -159,104 +159,6 @@ def compute_recommendation_score(row):
 
     return round(score, 1)
 
-########################################
-# 5. 개선된 캔들 차트 (5/20/60/120일선 + 확대축소)
-########################################
-
-@st.cache_data
-def load_ohlcv(ticker, base_date, days=300):
-    end   = datetime.strptime(base_date, '%Y%m%d')
-    start = end - timedelta(days=days)
-    df = fdr.DataReader(ticker, start, end)
-    if not df.empty:
-        df.rename(columns={'Open':'시가', 'High':'고가', 'Low':'저가', 'Close':'종가', 'Volume':'거래량'}, inplace=True)
-    return df
-
-def show_advanced_candle(ticker, ticker_name, base_date):
-    """5/20/60/120일 이평선 + 투자자별 수급 바 차트 + 확대축소 지원"""
-    try:
-        df = load_ohlcv(ticker, base_date, days=300)
-        if df.empty:
-            st.warning("OHLCV 데이터가 없습니다.")
-            return
-
-        close = df['종가']
-        df['MA5']   = close.rolling(5).mean()
-        df['MA20']  = close.rolling(20).mean()
-        df['MA60']  = close.rolling(60).mean()
-        df['MA120'] = close.rolling(120).mean()
-
-        # ── 캔들 + 이평선 ──
-        fig = go.Figure()
-        # X축 날짜 포맷팅 (datetime -> string)
-        x_dates = df.index.strftime('%Y-%m-%d')
-        fig.add_trace(go.Candlestick(
-            x=x_dates, open=df['시가'], high=df['고가'],
-            low=df['저가'], close=df['종가'], name='캔들',
-            increasing_line_color='#FF4B4B', decreasing_line_color='#0068FF',
-        ))
-        ma_colors = {'MA5': '#FFC107', 'MA20': '#FF6B00', 'MA60': '#0099FF', 'MA120': '#9C27B0'}
-        ma_names  = {'MA5': '5일선', 'MA20': '20일선', 'MA60': '60일선', 'MA120': '120일선'}
-        for col, color in ma_colors.items():
-            fig.add_trace(go.Scatter(
-                x=x_dates, y=df[col], mode='lines',
-                line=dict(color=color, width=1.5),
-                name=ma_names[col]
-            ))
-
-        fig.update_layout(
-            title=f"📈 {ticker_name} ({ticker}) — {base_date[:4]}.{base_date[4:6]}.{base_date[6:]}",
-            height=500,
-            xaxis_rangeslider_visible=False,   # 하단 슬라이더 제거
-            xaxis=dict(
-                type='category',               # 영업일만 표시 (주말 공백 제거)
-                rangeslider=dict(visible=False),
-                # 확대/축소 도구는 Plotly 기본 모드바에 포함되어 있음
-            ),
-            yaxis=dict(fixedrange=False),      # Y축 드래그 허용
-            dragmode='zoom',                    # 기본 마우스 드래그 = 박스 줌
-            margin=dict(l=10, r=10, t=50, b=10),
-            legend=dict(orientation='h', y=1.02, x=0),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # ── 투자자별 수급 탭 ──
-        st.subheader("💰 투자자별 순매수 동향 (최근 20거래일)")
-        inv_df = get_detailed_investor_flow(ticker, base_date)
-
-        if inv_df.empty:
-            st.info("수급 데이터를 가져올 수 없습니다. (데이터 소스 일시 제한)")
-        else:
-            # 최근 20일만 표시
-            inv_df = inv_df.tail(20)
-            
-            # 실제 가용 컬럼 확인 후 표시 (연기금 제외)
-            investor_cols = [c for c in ['개인', '외국인합계', '기관합계'] if c in inv_df.columns]
-
-            tab_labels = {'기관합계': '🏢 기관', '외국인합계': '🌎 외국인', '개인': '👤 개인'}
-            tabs = st.tabs([tab_labels.get(c, c) for c in investor_cols])
-
-            for tab, col in zip(tabs, investor_cols):
-                with tab:
-                    series = inv_df[col] / 1e8  # 억 단위
-                    colors = ['#FF4B4B' if v > 0 else '#0068FF' for v in series]
-                    
-                    x_axis = inv_df['날짜'].dt.strftime('%m/%d') if '날짜' in inv_df.columns else inv_df.index.strftime('%m/%d')
-                    
-                    bar_fig = go.Figure(go.Bar(
-                        x=x_axis,
-                        y=series,
-                        marker_color=colors,
-                        name=col
-                    ))
-                    bar_fig.update_layout(
-                        yaxis_title='순매수 (억원)',
-                        height=300,
-                        margin=dict(l=10, r=10, t=10, b=10)
-                    )
-                    st.plotly_chart(bar_fig, use_container_width=True)
-    except Exception as e:
-        st.error(f"차트 로딩 실패: {e}")
 
 ########################################
 # 6. Streamlit UI
@@ -362,4 +264,4 @@ if st.session_state.scan_result is not None:
             selected_name = selected_row['종목명']
             selected_ticker = selected_row['티커']
             
-        show_advanced_candle(selected_ticker, selected_name, base_date)
+        render_detail_analysis(selected_ticker, selected_name, base_date, '자동')
