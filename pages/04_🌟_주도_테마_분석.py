@@ -12,7 +12,7 @@ st.markdown("""
     background: #1e293b;
     border: 1px solid #334155;
     border-radius: 0.75rem;
-    padding: 1rem;
+    overflow: hidden;
     margin-bottom: 1rem;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
 }
@@ -20,9 +20,13 @@ st.markdown("""
     display: flex;
     justify-content: space-between;
     align-items: center;
+    background: #0f172a;
     border-bottom: 1px solid #334155;
-    padding-bottom: 0.5rem;
-    margin-bottom: 0.5rem;
+    padding: 0.8rem 1rem;
+}
+.stock-list-container {
+    padding: 0.5rem 1rem 1rem 1rem;
+    background: #1e293b;
 }
 .theme-title {
     font-size: 1.1rem;
@@ -177,7 +181,7 @@ for idx, row in themes_df.iterrows():
             
         card_html = f"""<div class="theme-card">
 {header_html}
-<div style="margin-top: 0.5rem;">
+<div class="stock-list-container">
 {stocks_html}
 </div>
 </div>"""
