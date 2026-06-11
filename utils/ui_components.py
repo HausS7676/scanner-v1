@@ -65,12 +65,12 @@ def generate_expert_summary(ticker_name, comp_info, fin_df, cons_data, tech, inv
             last_val = series.iloc[-1]
             days, total = 0, 0
             if last_val > 0:
-                for val in reversed(series):
+                for val in series.values[::-1]:
                     if val > 0: days += 1; total += val
                     else: break
                 return days, total, "순매수"
             elif last_val < 0:
-                for val in reversed(series):
+                for val in series.values[::-1]:
                     if val < 0: days += 1; total += val
                     else: break
                 return days, total, "순매도"
