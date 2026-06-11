@@ -2,7 +2,6 @@ import threading
 import time
 from datetime import datetime, timedelta
 import pandas as pd
-from pykrx import stock
 import streamlit as st
 import plotly.graph_objects as go
 import FinanceDataReader as fdr
@@ -96,8 +95,9 @@ def analyze_technical(ticker, base_date):
     try:
         end   = datetime.strptime(base_date, '%Y%m%d')
         start = end - timedelta(days=400)   # 120일 이평선까지 필요
-        df = stock.get_market_ohlcv_by_date(
-            start.strftime('%Y%m%d'), end.strftime('%Y%m%d'), ticker)
+        df = fdr.DataReader(ticker, start, end)
+        if not df.empty:
+            df.rename(columns={'Open':'시가', 'High':'고가', 'Low':'저가', 'Close':'종가', 'Volume':'거래량'}, inplace=True)
 
         if df.empty or len(df) < 60:
             return '데이터부족', 0
@@ -167,8 +167,9 @@ def compute_recommendation_score(row):
 def load_ohlcv(ticker, base_date, days=300):
     end   = datetime.strptime(base_date, '%Y%m%d')
     start = end - timedelta(days=days)
-    df = stock.get_market_ohlcv_by_date(
-        start.strftime('%Y%m%d'), end.strftime('%Y%m%d'), ticker)
+    df = fdr.DataReader(ticker, start, end)
+    if not df.empty:
+        df.rename(columns={'Open':'시가', 'High':'고가', 'Low':'저가', 'Close':'종가', 'Volume':'거래량'}, inplace=True)
     return df
 
 def show_advanced_candle(ticker, ticker_name, base_date):
