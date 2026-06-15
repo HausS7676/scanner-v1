@@ -10,7 +10,7 @@ import FinanceDataReader as fdr
 # Streamlit 페이지 설정
 # ──────────────────────────────────────────
 st.set_page_config(page_title="마켓 타이밍 & 추천", page_icon="📈", layout="wide")
-st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
+st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;}</style>", unsafe_allow_html=True)
 
 ########################################
 # 0. 유틸리티
