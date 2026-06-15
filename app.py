@@ -30,60 +30,7 @@ def get_latest_valid_date():
         pass
     return (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
 
-########################################
-# 1. 데이터 수집 (FDR 기반)
-########################################
-
-@st.cache_data(ttl=3600)
-def scan_hybrid_flow(min_mktcap=2000, min_trading=5):
-    """FDR에서 전 종목 리스트를 받아 시가총액/거래대금으로 1차 필터링합니다."""
-    try:
-        df_krx = fdr.StockListing('KRX')
-        df_krx['시가총액(억)'] = df_krx['Marcap'] / 1e8
-        df_krx['거래대금(억)'] = df_krx['Amount'] / 1e8
-
-        target_df = df_krx[
-            (df_krx['시가총액(억)'] >= min_mktcap) &
-            (df_krx['거래대금(억)'] >= min_trading)
-        ].copy()
-
-        # 거래대금 상위 200개로 압축 (성능)
-        target_df = target_df.sort_values('거래대금(억)', ascending=False).head(200)
-
-        rows = []
-        progress_text = st.empty()
-        bar = st.progress(0)
-        total = len(target_df)
-
-        for i, (_, row) in enumerate(target_df.iterrows()):
-            try:
-                if i % 5 == 0:
-                    progress_text.text(f"스마트 스캔 중... ({i}/{total})")
-                    bar.progress(i / total)
-
-                volume_ratio = row['Volume'] / (row['Stocks'] * 0.001) if row['Stocks'] > 0 else 0
-                rows.append({
-                    '티커':         row['Code'],
-                    '종목명':       row['Name'],
-                    '현재가':       int(row['Close']),
-                    '등락률(%)':    round(row['ChagesRatio'], 2),
-                    '시가총액(억)': round(row['시가총액(억)']),
-                    '거래대금(억)': round(row['거래대금(억)'], 1),
-                    '수급점수':     round(volume_ratio * abs(row['ChagesRatio']), 2),
-                })
-            except:
-                continue
-
-        progress_text.empty()
-        bar.empty()
-
-        df_result = pd.DataFrame(rows)
-        if not df_result.empty:
-            df_result.sort_values('수급점수', ascending=False, inplace=True)
-        return df_result, get_latest_valid_date()
-    except Exception as e:
-        st.error(f"데이터 스캔 중 오류: {e}")
-        return pd.DataFrame(), ""
+from utils.data_engine import scan_hybrid_flow
 
 ########################################
 # 2. 기술적 지표 – RSI, 이평선 (pykrx)
@@ -120,7 +67,6 @@ def analyze_technical(ticker, base_date):
     except:
         return '오류', 0
 
-from utils.data_engine import get_detailed_investor_flow
 from utils.ui_components import render_detail_analysis
 ########################################
 # 4. 종합 점수 계산 및 추천 순위
@@ -128,7 +74,7 @@ from utils.ui_components import render_detail_analysis
 
 def compute_recommendation_score(row):
     """
-    각 지표를 0~100점으로 정규화하여 가중 합산합니다.
+    장세 맞춤형 추천 점수
     - 수급점수  : 40%  (거래량 회전율 × 등락률)
     - 거래대금  : 20%  (상위일수록 높은 점수)
     - RSI 타점  : 25%  (40~60 구간에서 최고 점수, 70이상/30이하 감점)
@@ -159,6 +105,34 @@ def compute_recommendation_score(row):
 
     return round(score, 1)
 
+def compute_trend_score(row):
+    """
+    추세추종 추천 점수
+    - 추세 (정배열): 40%
+    - RSI 타점 (50~70 강세구간): 30%
+    - 수급점수 (돌파 모멘텀): 30%
+    """
+    score = 0.0
+    
+    # 1) 추세 (정배열 만점)
+    score += (1.0 if '정배열' in str(row.get('추세', '')) else 0.0) * 40
+    
+    # 2) RSI 강세 구간 (50~70)
+    rsi = row.get('RSI', 50)
+    if 50 <= rsi <= 70:
+        rsi_score = 1.0
+    elif 70 < rsi <= 80:
+        rsi_score = 0.7  # 약간 과매수지만 추세 이어질 가능성
+    elif 40 <= rsi < 50:
+        rsi_score = 0.5  # 막 상승 시작
+    else:
+        rsi_score = 0.1
+    score += rsi_score * 30
+    
+    # 3) 수급 점수 (거래량 동반 상승)
+    score += min(row.get('수급점수', 0) / 10.0, 1.0) * 30
+    
+    return round(score, 1)
 
 ########################################
 # 6. Streamlit UI
@@ -170,7 +144,8 @@ st.caption("FinanceDataReader × pykrx 하이브리드 엔진 | 거래량·모�
 with st.expander("ℹ️ 사용 안내 (클릭하여 펼치기)"):
     st.markdown("""
     - **수급점수**: 거래량 회전율 × 등락률 절대값. 단기 자금 유입 강도를 나타냅니다.
-    - **추천점수**: 수급(40%) + 거래대금(20%) + RSI 타점(25%) + 이평선 추세(15%) 종합 평가
+    - **장세 맞춤형 추천**: 수급(40%) + 거래대금(20%) + RSI 타점(25%) + 이평선 추세(15%)
+    - **추세 추종 추천**: 정배열(40%) + 강세RSI(30%) + 수급모멘텀(30%)
     - **RSI 해석**: 30 이하 = 과매도(저점 반등 기대), 70 이상 = 과매수(추격 주의)
     - **KRX 서버 제한**: 장 시작 전은 전일 기준 데이터로 자동 분석합니다.
     """)
@@ -222,67 +197,125 @@ if st.session_state.scan_result is not None:
         # 거래대금 상대 순위(0~1)
         top_stocks['거래대금_rank'] = top_stocks['거래대금(억)'].rank(pct=True)
 
-        # 종합 추천 점수
-        top_stocks['추천점수'] = top_stocks.apply(compute_recommendation_score, axis=1)
-        top_stocks.sort_values('추천점수', ascending=False, inplace=True)
-        top_stocks.reset_index(drop=True, inplace=True)
-        top_stocks.index += 1  # 1위부터 시작
-
-        # 순위 꾸미기
         def rank_label(i):
             labels = {1: '🥇', 2: '🥈', 3: '🥉'}
             return labels.get(i, f'{i}위')
 
-        if '순위' in top_stocks.columns:
-            top_stocks.drop(columns=['순위'], inplace=True)
-        top_stocks.insert(0, '순위', [rank_label(i) for i in top_stocks.index])
-
         display_cols = ['순위', '종목명', '현재가', '등락률(%)', '시가총액(억)',
                         '거래대금(억)', '수급점수', '추세', 'RSI', '추천점수']
 
-        col_title, col_btn = st.columns([7, 3])
-        with col_title:
-            st.subheader("📋 종합 추천 순위")
-        with col_btn:
-            import io
-            excel_buffer = io.BytesIO()
-            try:
-                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    top_stocks[display_cols].to_excel(writer, index=False, sheet_name='추천순위')
-                st.download_button(
-                    label="📥 엑셀(Excel) 다운로드",
-                    data=excel_buffer.getvalue(),
-                    file_name=f"스마트_수급_추천순위_{base_date}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-            except Exception as e:
-                # openpyxl이 없는 경우 CSV 다운로드로 폴백
-                csv_data = top_stocks[display_cols].to_csv(index=False).encode('utf-8-sig')
-                st.download_button(
-                    label="📥 엑셀(CSV) 다운로드",
-                    data=csv_data,
-                    file_name=f"스마트_수급_추천순위_{base_date}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+        # 장세 맞춤형
+        top_stocks_market = top_stocks.copy()
+        top_stocks_market['추천점수'] = top_stocks_market.apply(compute_recommendation_score, axis=1)
+        top_stocks_market.sort_values('추천점수', ascending=False, inplace=True)
+        top_stocks_market.reset_index(drop=True, inplace=True)
+        top_stocks_market.index += 1
+        top_stocks_market.insert(0, '순위', [rank_label(i) for i in top_stocks_market.index])
 
-        event = st.dataframe(
-            top_stocks[display_cols].set_index('순위'),
-            use_container_width=True,
-            height=400,
-            on_select="rerun",
-            selection_mode="single-row"
-        )
+        # 추세 추종형
+        top_stocks_trend = top_stocks.copy()
+        top_stocks_trend['추천점수'] = top_stocks_trend.apply(compute_trend_score, axis=1)
+        top_stocks_trend.sort_values('추천점수', ascending=False, inplace=True)
+        top_stocks_trend.reset_index(drop=True, inplace=True)
+        top_stocks_trend.index += 1
+        top_stocks_trend.insert(0, '순위', [rank_label(i) for i in top_stocks_trend.index])
+
+        tab1, tab2 = st.tabs(["🌟 장세 맞춤형 추천", "📈 추세 추종 추천"])
+        import io
+
+        with tab1:
+            col_title, col_btn = st.columns([7, 3])
+            with col_title:
+                st.subheader("📋 장세 맞춤형 추천 순위")
+            with col_btn:
+                excel_buffer1 = io.BytesIO()
+                try:
+                    with pd.ExcelWriter(excel_buffer1, engine='openpyxl') as writer:
+                        top_stocks_market[display_cols].to_excel(writer, index=False, sheet_name='장세맞춤형')
+                    st.download_button(
+                        label="📥 엑셀(Excel) 다운로드",
+                        data=excel_buffer1.getvalue(),
+                        file_name=f"스마트_수급_장세맞춤형_{base_date}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="btn_market"
+                    )
+                except Exception as e:
+                    csv_data1 = top_stocks_market[display_cols].to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(
+                        label="📥 엑셀(CSV) 다운로드",
+                        data=csv_data1,
+                        file_name=f"스마트_수급_장세맞춤형_{base_date}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="btn_market_csv"
+                    )
+
+            event_market = st.dataframe(
+                top_stocks_market[display_cols].set_index('순위'),
+                use_container_width=True,
+                height=400,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="df_market"
+            )
+
+        with tab2:
+            col_title, col_btn = st.columns([7, 3])
+            with col_title:
+                st.subheader("📋 추세 추종 추천 순위")
+            with col_btn:
+                excel_buffer2 = io.BytesIO()
+                try:
+                    with pd.ExcelWriter(excel_buffer2, engine='openpyxl') as writer:
+                        top_stocks_trend[display_cols].to_excel(writer, index=False, sheet_name='추세추종')
+                    st.download_button(
+                        label="📥 엑셀(Excel) 다운로드",
+                        data=excel_buffer2.getvalue(),
+                        file_name=f"스마트_수급_추세추종_{base_date}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="btn_trend"
+                    )
+                except Exception as e:
+                    csv_data2 = top_stocks_trend[display_cols].to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(
+                        label="📥 엑셀(CSV) 다운로드",
+                        data=csv_data2,
+                        file_name=f"스마트_수급_추세추종_{base_date}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="btn_trend_csv"
+                    )
+
+            event_trend = st.dataframe(
+                top_stocks_trend[display_cols].set_index('순위'),
+                use_container_width=True,
+                height=400,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="df_trend"
+            )
+
         # ── 차트 섹션 (session_state으로 선택 유지) ──
         st.markdown("---")
         st.subheader("📊 종목 정밀 차트")
 
-        if event.selection and event.selection.rows:
-            row_idx = event.selection.rows[0]
-            selected_row = top_stocks.iloc[row_idx]
-            selected_name = selected_row['종목명']
+        selected_ticker = None
+        selected_name = None
+
+        if event_market.selection and event_market.selection.rows:
+            row_idx = event_market.selection.rows[0]
+            selected_row = top_stocks_market.iloc[row_idx]
             selected_ticker = selected_row['티커']
+            selected_name = selected_row['종목명']
+        elif event_trend.selection and event_trend.selection.rows:
+            row_idx = event_trend.selection.rows[0]
+            selected_row = top_stocks_trend.iloc[row_idx]
+            selected_ticker = selected_row['티커']
+            selected_name = selected_row['종목명']
+
+        if selected_ticker and selected_name:
             render_detail_analysis(selected_ticker, selected_name, base_date, '자동')
         else:
-            st.info("👆 위 종합 추천 순위 표에서 확인하고 싶은 종목의 행(체크박스)을 클릭하시면 상세 분석이 표시됩니다.")
+            st.info("👆 위 추천 순위 표에서 확인하고 싶은 종목의 행(체크박스)을 클릭하시면 상세 분석이 표시됩니다.")
