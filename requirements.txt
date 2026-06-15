@@ -10,3 +10,4 @@ setuptools
 lxml
 
 supabase
+openpyxl

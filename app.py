@@ -240,7 +240,33 @@ if st.session_state.scan_result is not None:
         display_cols = ['순위', '종목명', '현재가', '등락률(%)', '시가총액(억)',
                         '거래대금(억)', '수급점수', '추세', 'RSI', '추천점수']
 
-        st.subheader("📋 종합 추천 순위")
+        col_title, col_btn = st.columns([7, 3])
+        with col_title:
+            st.subheader("📋 종합 추천 순위")
+        with col_btn:
+            import io
+            excel_buffer = io.BytesIO()
+            try:
+                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                    top_stocks[display_cols].to_excel(writer, index=False, sheet_name='추천순위')
+                st.download_button(
+                    label="📥 엑셀(Excel) 다운로드",
+                    data=excel_buffer.getvalue(),
+                    file_name=f"스마트_수급_추천순위_{base_date}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            except Exception as e:
+                # openpyxl이 없는 경우 CSV 다운로드로 폴백
+                csv_data = top_stocks[display_cols].to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 엑셀(CSV) 다운로드",
+                    data=csv_data,
+                    file_name=f"스마트_수급_추천순위_{base_date}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
         event = st.dataframe(
             top_stocks[display_cols].set_index('순위'),
             use_container_width=True,
