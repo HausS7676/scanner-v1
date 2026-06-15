@@ -43,25 +43,27 @@ st.title("🔍 종목 심층 분석 및 AI 트레이딩 전략")
 
 col1, col2 = st.columns([1, 2])
 with col1:
-    default_val = st.session_state.get('selected_name', st.session_state.get('selected_ticker', "삼성전자"))
-    search_query = st.text_input("종목명 또는 종목코드 6자리를 입력하세요", value=default_val)
+    search_query = st.text_input("종목명 또는 종목코드 6자리를 입력하세요", value="", placeholder="종목명 또는 코드 입력 후 엔터")
     engine = st.session_state.get('data_engine', '자동')
     
 if st.button("분석 시작", type="primary"):
     query = search_query.strip()
-    mapping = get_krx_mapping()
-    
-    # 종목명으로 입력한 경우 코드 변환
-    if query in mapping:
-        ticker = mapping[query]
-        ticker_name = query
+    if not query:
+        st.warning("종목명이나 코드를 입력해주세요.")
     else:
-        ticker = query
-        # 코드로 입력한 경우 이름 찾기 (역방향)
-        reverse_mapping = {v: k for k, v in mapping.items()}
-        ticker_name = reverse_mapping.get(ticker, ticker)
+        mapping = get_krx_mapping()
         
-    base_date = get_latest_valid_date()
-    
-    with st.spinner(f"'{ticker_name}' ({ticker}) 종목 데이터 및 기관 수급 분석 중..."):
-        render_detail_analysis(ticker, ticker_name, base_date, engine)
+        # 종목명으로 입력한 경우 코드 변환
+        if query in mapping:
+            ticker = mapping[query]
+            ticker_name = query
+        else:
+            ticker = query
+            # 코드로 입력한 경우 이름 찾기 (역방향)
+            reverse_mapping = {v: k for k, v in mapping.items()}
+            ticker_name = reverse_mapping.get(ticker, ticker)
+            
+        base_date = get_latest_valid_date()
+        
+        with st.spinner(f"'{ticker_name}' ({ticker}) 종목 데이터 및 기관 수급 분석 중..."):
+            render_detail_analysis(ticker, ticker_name, base_date, engine)
