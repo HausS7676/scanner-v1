@@ -126,76 +126,173 @@ def generate_expert_summary(ticker_name, comp_info, fin_df, cons_data, tech, inv
             summary += "> 현재 주가는 과열이나 과매도 상태가 아닌 적정 수준에서 등락하고 있습니다.\n"
             
     return summary
-def render_radar_and_scores(df, tech, inv_detail_df):
-    scores = {'추세강도': 50, '모멘텀지표': 50, '기관수급': 50, '외국인수급': 50, '거래량모멘텀': 50, '변동성리스크': 50}
+
+def render_radar_and_scores(df, tech, inv_detail_df, comp_info, cons_data):
+    scores = {}
     details = {}
+    subdetails = {}
     
-    if tech and "정배열" in tech.get("추세", ""):
+    current_price = df['종가'].iloc[-1]
+    
+    # 1. 추세강도
+    ma5 = df['종가'].rolling(5).mean().iloc[-1] if len(df) >= 5 else current_price
+    ma20 = df['종가'].rolling(20).mean().iloc[-1] if len(df) >= 20 else current_price
+    ma60 = df['종가'].rolling(60).mean().iloc[-1] if len(df) >= 60 else current_price
+    
+    if current_price > ma5 > ma20 > ma60:
         scores['추세강도'] = 100
-        details['추세강도'] = "🔥 완전 정배열 (이평선 상승 추세)"
-    elif tech and "역배열" in tech.get("추세", ""):
+        details['추세강도'] = "🔥 완전 정배열"
+    elif current_price < ma5 < ma20 < ma60:
         scores['추세강도'] = 20
-        details['추세강도'] = "❄️ 완전 역배열 (하락 추세)"
+        details['추세강도'] = "❄️ 역배열 하락세"
     else:
         scores['추세강도'] = 60
-        details['추세강도'] = "⚖️ 혼조세 (방향성 탐색 중)"
-        
-    if tech:
-        rsi = tech.get("RSI", 50)
-        if 40 <= rsi <= 70:
-            scores['모멘텀지표'] = 85
-            details['모멘텀지표'] = f"RSI: 적정 구간 ({rsi:.1f}) | 모멘텀 양호"
-        elif rsi > 70:
-            scores['모멘텀지표'] = 40
-            details['모멘텀지표'] = f"RSI: 단기 과매수 ({rsi:.1f}) | 고점 주의"
-        else:
-            scores['모멘텀지표'] = 60
-            details['모멘텀지표'] = f"RSI: 과매도 ({rsi:.1f}) | 반등 기대"
-    else:
-        details['모멘텀지표'] = "데이터 부족"
-    
-    if not inv_detail_df.empty and len(inv_detail_df) >= 20:
-        f_diff = inv_detail_df['외국인_누적'].iloc[-1] - inv_detail_df['외국인_누적'].iloc[-20]
-        i_diff = inv_detail_df['기관_누적'].iloc[-1] - inv_detail_df['기관_누적'].iloc[-20]
-        scores['외국인수급'] = 90 if f_diff > 0 else 30
-        scores['기관수급'] = 90 if i_diff > 0 else 30
-        details['외국인수급'] = f"최근 20일 누적 {'순매수' if f_diff > 0 else '순매도'}"
-        details['기관수급'] = f"최근 20일 누적 {'순매수' if i_diff > 0 else '순매도'}"
-    else:
-        details['외국인수급'] = "데이터 부족"
-        details['기관수급'] = "데이터 부족"
-    
-    if not df.empty and len(df) >= 20:
-        vol_5 = df['거래량'].tail(5).mean()
-        vol_20 = df['거래량'].tail(20).mean()
-        if vol_5 > vol_20 * 1.5:
-            scores['거래량모멘텀'] = 95
-            details['거래량모멘텀'] = "최근 거래량 급증 (세력 개입 가능성)"
-        elif vol_5 > vol_20:
-            scores['거래량모멘텀'] = 70
-            details['거래량모멘텀'] = "거래량 점진적 증가"
-        else:
-            scores['거래량모멘텀'] = 40
-            details['거래량모멘텀'] = "거래량 부진 (시장 소외)"
-    else:
-        details['거래량모멘텀'] = "데이터 부족"
-            
-    if tech:
-        disp = tech.get("MA20이격도", 100)
-        if 95 <= disp <= 105:
-            scores['변동성리스크'] = 80
-            details['변동성리스크'] = "안정적인 흐름 (이격도 정상)"
-        elif disp > 115 or disp < 85:
-            scores['변동성리스크'] = 30
-            details['변동성리스크'] = "변동성 확대 (급등락 주의)"
-        else:
-            scores['변동성리스크'] = 60
-            details['변동성리스크'] = "보통 변동성"
-    else:
-        details['변동성리스크'] = "데이터 부족"
+        details['추세강도'] = "⚖️ 혼조세 (방향 탐색)"
+    subdetails['추세강도'] = f"📌 MA5: {int(ma5):,} / MA20: {int(ma20):,}"
 
-    total_score = int(sum(scores.values()) * (1000 / 600))
-    return total_score, scores, details
+    # 2. 모멘텀지표
+    rsi = tech.get("RSI", 50) if tech else 50
+    macd_hist = tech.get("MACD_Hist", 0) if tech else 0
+    std = df['종가'].rolling(20).std().iloc[-1]
+    upper_bb = ma20 + (std * 2)
+    bb_pos = ((current_price - ma20) / (upper_bb - ma20) * 100) if upper_bb != ma20 else 50
+    
+    if 40 <= rsi <= 70:
+        scores['모멘텀지표'] = 85
+        details['모멘텀지표'] = f"RSI: 적정 구간 | BB위치: {int(bb_pos)}%"
+    elif rsi > 70:
+        scores['모멘텀지표'] = 40
+        details['모멘텀지표'] = f"RSI: 과매수 | BB위치: {int(bb_pos)}%"
+    else:
+        scores['모멘텀지표'] = 60
+        details['모멘텀지표'] = f"RSI: 과매도 | BB위치: {int(bb_pos)}%"
+    subdetails['모멘텀지표'] = f"📌 RSI {rsi:.1f} | MACD {'▲' if macd_hist > 0 else '▼'}"
+
+    # 3 & 4. 수급 (기관, 외국인)
+    def calc_flow(series, name):
+        if len(series) == 0: return 50, f"⚪ {name} 수급 파악 불가", "📌 데이터 없음"
+        last_val = series.iloc[-1]
+        days = 0
+        total = 0
+        if last_val > 0:
+            for v in series.values[::-1]:
+                if v > 0: days += 1; total += v
+                else: break
+            score = min(50 + (days * 10) + (total / 1e9), 100)
+            return score, f"🟢 {name} 순매수 우위", f"📌 +{int(total/1e8):,}억 (연속{days}일)"
+        elif last_val < 0:
+            for v in series.values[::-1]:
+                if v < 0: days += 1; total += v
+                else: break
+            score = max(50 - (days * 10) - (abs(total) / 1e9), 0)
+            return score, f"🔴 {name} 순매도 우위", f"📌 {int(total/1e8):,}억 (연속{days}일)"
+        return 50, f"⚪ {name} 관망", "📌 매수/매도 동률"
+
+    if not inv_detail_df.empty:
+        i_sc, i_dt, i_sub = calc_flow(inv_detail_df.get('기관합계', pd.Series(dtype=float)), "기관")
+        f_sc, f_dt, f_sub = calc_flow(inv_detail_df.get('외국인합계', pd.Series(dtype=float)), "외국인")
+        scores['기관수급'] = int(i_sc)
+        details['기관수급'] = i_dt
+        subdetails['기관수급'] = i_sub
+        scores['외국인수급'] = int(f_sc)
+        details['외국인수급'] = f_dt
+        subdetails['외국인수급'] = f_sub
+    else:
+        scores['기관수급'], scores['외국인수급'] = 50, 50
+        details['기관수급'], details['외국인수급'] = "데이터 없음", "데이터 없음"
+        subdetails['기관수급'], subdetails['외국인수급'] = "📌 -", "📌 -"
+
+    # 5. 가격모멘텀 (52주 고점 대비)
+    high52 = df['고가'].tail(250).max() if len(df) > 0 else current_price
+    if high52 > 0:
+        ratio = (current_price / high52 - 1) * 100
+        if ratio > -5:
+            scores['가격모멘텀'] = 90
+            details['가격모멘텀'] = "🚀 52주 신고가 권역 (강한 상승 추세)"
+        elif ratio > -15:
+            scores['가격모멘텀'] = 70
+            details['가격모멘텀'] = "📈 고점 대비 양호한 조정"
+        elif ratio < -30:
+            scores['가격모멘텀'] = 30
+            details['가격모멘텀'] = "📉 심한 낙폭 (바닥 확인 필요)"
+        else:
+            scores['가격모멘텀'] = 50
+            details['가격모멘텀'] = "횡보 / 박스권"
+        subdetails['가격모멘텀'] = f"📌 52주 고점비 {ratio:+.1f}%"
+    else:
+        scores['가격모멘텀'] = 50
+        details['가격모멘텀'] = "데이터 없음"
+        subdetails['가격모멘텀'] = "📌 -"
+
+    # 6. 거래량모멘텀
+    if len(df) >= 20:
+        vol_1 = df['거래량'].iloc[-1]
+        vol_avg = df['거래량'].tail(20).mean()
+        vol_ratio = vol_1 / vol_avg if vol_avg > 0 else 1
+        
+        # OBV
+        obv = (np.sign(df['종가'].diff()) * df['거래량']).fillna(0).cumsum()
+        obv_trend = '⬆' if obv.iloc[-1] > obv.iloc[-5] else '⬇'
+        
+        if vol_ratio > 3:
+            scores['거래량모멘텀'] = 100
+            details['거래량모멘텀'] = "🔥 거래량 폭발 (세력/기관 유입 가능성)"
+        elif vol_ratio > 1.5:
+            scores['거래량모멘텀'] = 80
+            details['거래량모멘텀'] = "✨ 거래량 증가세"
+        elif vol_ratio < 0.5:
+            scores['거래량모멘텀'] = 30
+            details['거래량모멘텀'] = "💤 거래량 급감 (소외)"
+        else:
+            scores['거래량모멘텀'] = 50
+            details['거래량모멘텀'] = "평이한 거래량"
+        subdetails['거래량모멘텀'] = f"📌 거래량 평균비 {vol_ratio:.1f}배 | OBV {obv_trend}"
+    else:
+        scores['거래량모멘텀'] = 50
+        details['거래량모멘텀'] = "데이터 없음"
+        subdetails['거래량모멘텀'] = "📌 -"
+
+    # 7. 변동성리스크
+    if len(df) >= 14:
+        atr = (df['고가'] - df['저가']).tail(14).mean()
+        volatility = (atr / current_price) * 100
+        if volatility > 4:
+            scores['변동성리스크'] = 20
+            details['변동성리스크'] = "🔴 변동성 매우 높음 (고위험)"
+        elif volatility > 2:
+            scores['변동성리스크'] = 60
+            details['변동성리스크'] = "🟡 변동성 보통"
+        else:
+            scores['변동성리스크'] = 90
+            details['변동성리스크'] = "🟢 안정적인 주가 흐름"
+        subdetails['변동성리스크'] = f"📌 일간 변동성 {volatility:.2f}%"
+    else:
+        scores['변동성리스크'] = 50
+        details['변동성리스크'] = "데이터 없음"
+        subdetails['변동성리스크'] = "📌 -"
+
+    # 8. 시장포지션
+    mkt_cap = safe_float(str(cons_data.get('market_cap', '0')).replace('억','').replace(',',''))
+    trade_val = (df['거래량'].iloc[-1] * current_price) / 1e8 if not df.empty else 0
+    
+    if mkt_cap > 100000:
+        scores['시장포지션'] = 100
+        details['시장포지션'] = "🏛 대형주 (안정성 우수)"
+    elif mkt_cap > 10000:
+        scores['시장포지션'] = 70
+        details['시장포지션'] = "🏢 중형주 (성장/안정 균형)"
+    else:
+        scores['시장포지션'] = 40
+        details['시장포지션'] = "🏠 소형주 (높은 변동성)"
+    subdetails['시장포지션'] = f"📌 시총 {int(mkt_cap):,}억 | 거래대금 {int(trade_val):,}억"
+
+    # 종합 점수 (가중치 평균)
+    # 추세(15), 모멘텀(15), 외국인(15), 기관(15), 거래량(15), 가격(10), 시장(10), 변동성(5)
+    w = {'추세강도':0.15, '모멘텀지표':0.15, '외국인수급':0.15, '기관수급':0.15, 
+         '거래량모멘텀':0.15, '가격모멘텀':0.1, '시장포지션':0.1, '변동성리스크':0.05}
+    total_score = int(sum(scores[k] * w[k] for k in w) * 10)  # 만점 1000점 스케일
+
+    return total_score, scores, details, subdetails
 
 def render_detail_analysis(ticker, ticker_name, base_date, engine):
     is_etf = check_is_etf(ticker)
@@ -222,23 +319,23 @@ def render_detail_analysis(ticker, ticker_name, base_date, engine):
     st.markdown(f"## 📊 {ticker_name} <span style='font-size:1rem; color:gray;'>({ticker})</span>", unsafe_allow_html=True)
     
     tech = analyze_technical(df)
-    total_score, radar_scores, radar_details = render_radar_and_scores(df, tech, inv_detail_df)
+    total_score, radar_scores, radar_details, radar_subdetails = render_radar_and_scores(df, tech, inv_detail_df, comp_info, cons_data)
     
     col_price, col_score = st.columns([2, 1])
     with col_price:
         st.markdown(f"### {current_price:,}원", unsafe_allow_html=True)
     with col_score:
-        st.markdown(f"<div style='text-align:right;'><h2 style='color:#10b981; margin-bottom:0;'>{total_score}</h2><span style='color:gray;'>종합 점수</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:right;'><h2 style='color:#10b981; margin-bottom:0; font-size:3rem;'>{total_score}</h2><span style='color:gray;'>종합 점수</span></div>", unsafe_allow_html=True)
     
     st.markdown("<hr>", unsafe_allow_html=True)
     with st.container(border=True):
         st.markdown(generate_expert_summary(ticker_name, comp_info, fin_df, cons_data, tech, inv_detail_df))
     
     # 레이더 차트 & 지표별 점수 UI 추가
-    rc1, rc2 = st.columns([1, 1])
+    rc1, rc2 = st.columns([1, 1.2])
     with rc1:
         st.markdown("#### 📡 종합 지표 레이더")
-        categories = ['기관수급', '모멘텀지표', '추세강도', '변동성리스크', '거래량모멘텀', '외국인수급']
+        categories = ['기관수급', '모멘텀지표', '추세강도', '시장포지션', '변동성리스크', '거래량모멘텀', '가격모멘텀', '외국인수급']
         values = [radar_scores[c] for c in categories]
         
         fig_radar = go.Figure()
@@ -260,35 +357,39 @@ def render_detail_analysis(ticker, ticker_name, base_date, engine):
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             margin=dict(l=40, r=40, t=20, b=20),
-            height=350,
+            height=400,
             dragmode=False
         )
         st.plotly_chart(fig_radar, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
         
     with rc2:
         st.markdown("#### 📊 지표별 세부 점수")
-        st.markdown("<div style='height:350px; overflow-y:auto; padding-right:10px;'>", unsafe_allow_html=True)
+        st.markdown("<div style='height:450px; overflow-y:auto; padding-right:10px;'>", unsafe_allow_html=True)
+        # Sort or list all 8 categories
         for cat in categories:
             score_val = radar_scores[cat]
             color = "#10b981" if score_val >= 80 else "#f59e0b" if score_val >= 50 else "#ef4444"
             icon = "📊"
-            if cat == '추세강도': icon = "📈"
+            if cat == '추세강도': icon = "📉"
             elif cat == '모멘텀지표': icon = "⚡"
             elif cat == '기관수급': icon = "🏢"
             elif cat == '외국인수급': icon = "🌍"
-            elif cat == '거래량모멘텀': icon = "💥"
-            elif cat == '변동성리스크': icon = "🛡️"
+            elif cat == '거래량모멘텀': icon = "📦"
+            elif cat == '가격모멘텀': icon = "📈"
+            elif cat == '시장포지션': icon = "🏛️"
+            elif cat == '변동성리스크': icon = "🎯"
             
             st.markdown(f"""
-            <div style="background:rgba(30,41,59,0.5); border:1px solid rgba(148,163,184,0.2); border-radius:10px; padding:12px; margin-bottom:10px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-                    <span style="font-weight:bold; font-size:1.05rem;">{icon} {cat}</span>
-                    <span style="font-weight:bold; font-size:1.1rem; color:{color};">{score_val}점</span>
+            <div style="background:rgba(30,41,59,0.5); border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:16px; margin-bottom:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-weight:bold; font-size:1.1rem; color:white;">{icon} {cat}</span>
+                    <span style="font-weight:bold; font-size:1.2rem; color:{color};">{score_val}점</span>
                 </div>
-                <div style="background:rgba(255,255,255,0.1); border-radius:5px; height:8px; width:100%;">
-                    <div style="background:{color}; width:{score_val}%; height:100%; border-radius:5px;"></div>
+                <div style="background:rgba(255,255,255,0.1); border-radius:6px; height:10px; width:100%; margin-bottom:12px;">
+                    <div style="background:{color}; width:{score_val}%; height:100%; border-radius:6px;"></div>
                 </div>
-                <div style="margin-top:6px; font-size:0.85rem; color:gray;">{radar_details[cat]}</div>
+                <div style="margin-top:6px; font-size:0.9rem; color:#e2e8f0; margin-bottom:4px;">{radar_details[cat]}</div>
+                <div style="font-size:0.85rem; color:#94a3b8;">{radar_subdetails[cat]}</div>
             </div>
             """, unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
