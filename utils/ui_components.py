@@ -126,6 +126,76 @@ def generate_expert_summary(ticker_name, comp_info, fin_df, cons_data, tech, inv
             summary += "> 현재 주가는 과열이나 과매도 상태가 아닌 적정 수준에서 등락하고 있습니다.\n"
             
     return summary
+def render_radar_and_scores(df, tech, inv_detail_df):
+    scores = {'추세강도': 50, '모멘텀지표': 50, '기관수급': 50, '외국인수급': 50, '거래량모멘텀': 50, '변동성리스크': 50}
+    details = {}
+    
+    if tech and "정배열" in tech.get("추세", ""):
+        scores['추세강도'] = 100
+        details['추세강도'] = "🔥 완전 정배열 (이평선 상승 추세)"
+    elif tech and "역배열" in tech.get("추세", ""):
+        scores['추세강도'] = 20
+        details['추세강도'] = "❄️ 완전 역배열 (하락 추세)"
+    else:
+        scores['추세강도'] = 60
+        details['추세강도'] = "⚖️ 혼조세 (방향성 탐색 중)"
+        
+    if tech:
+        rsi = tech.get("RSI", 50)
+        if 40 <= rsi <= 70:
+            scores['모멘텀지표'] = 85
+            details['모멘텀지표'] = f"RSI: 적정 구간 ({rsi:.1f}) | 모멘텀 양호"
+        elif rsi > 70:
+            scores['모멘텀지표'] = 40
+            details['모멘텀지표'] = f"RSI: 단기 과매수 ({rsi:.1f}) | 고점 주의"
+        else:
+            scores['모멘텀지표'] = 60
+            details['모멘텀지표'] = f"RSI: 과매도 ({rsi:.1f}) | 반등 기대"
+    else:
+        details['모멘텀지표'] = "데이터 부족"
+    
+    if not inv_detail_df.empty and len(inv_detail_df) >= 20:
+        f_diff = inv_detail_df['외국인_누적'].iloc[-1] - inv_detail_df['외국인_누적'].iloc[-20]
+        i_diff = inv_detail_df['기관_누적'].iloc[-1] - inv_detail_df['기관_누적'].iloc[-20]
+        scores['외국인수급'] = 90 if f_diff > 0 else 30
+        scores['기관수급'] = 90 if i_diff > 0 else 30
+        details['외국인수급'] = f"최근 20일 누적 {'순매수' if f_diff > 0 else '순매도'}"
+        details['기관수급'] = f"최근 20일 누적 {'순매수' if i_diff > 0 else '순매도'}"
+    else:
+        details['외국인수급'] = "데이터 부족"
+        details['기관수급'] = "데이터 부족"
+    
+    if not df.empty and len(df) >= 20:
+        vol_5 = df['거래량'].tail(5).mean()
+        vol_20 = df['거래량'].tail(20).mean()
+        if vol_5 > vol_20 * 1.5:
+            scores['거래량모멘텀'] = 95
+            details['거래량모멘텀'] = "최근 거래량 급증 (세력 개입 가능성)"
+        elif vol_5 > vol_20:
+            scores['거래량모멘텀'] = 70
+            details['거래량모멘텀'] = "거래량 점진적 증가"
+        else:
+            scores['거래량모멘텀'] = 40
+            details['거래량모멘텀'] = "거래량 부진 (시장 소외)"
+    else:
+        details['거래량모멘텀'] = "데이터 부족"
+            
+    if tech:
+        disp = tech.get("MA20이격도", 100)
+        if 95 <= disp <= 105:
+            scores['변동성리스크'] = 80
+            details['변동성리스크'] = "안정적인 흐름 (이격도 정상)"
+        elif disp > 115 or disp < 85:
+            scores['변동성리스크'] = 30
+            details['변동성리스크'] = "변동성 확대 (급등락 주의)"
+        else:
+            scores['변동성리스크'] = 60
+            details['변동성리스크'] = "보통 변동성"
+    else:
+        details['변동성리스크'] = "데이터 부족"
+
+    total_score = int(sum(scores.values()) * (1000 / 600))
+    return total_score, scores, details
 
 def render_detail_analysis(ticker, ticker_name, base_date, engine):
     is_etf = check_is_etf(ticker)
@@ -150,13 +220,79 @@ def render_detail_analysis(ticker, ticker_name, base_date, engine):
     current_price = df['종가'].iloc[-1]
     
     st.markdown(f"## 📊 {ticker_name} <span style='font-size:1rem; color:gray;'>({ticker})</span>", unsafe_allow_html=True)
-    st.markdown(f"### {current_price:,}원", unsafe_allow_html=True)
     
     tech = analyze_technical(df)
+    total_score, radar_scores, radar_details = render_radar_and_scores(df, tech, inv_detail_df)
+    
+    col_price, col_score = st.columns([2, 1])
+    with col_price:
+        st.markdown(f"### {current_price:,}원", unsafe_allow_html=True)
+    with col_score:
+        st.markdown(f"<div style='text-align:right;'><h2 style='color:#10b981; margin-bottom:0;'>{total_score}</h2><span style='color:gray;'>종합 점수</span></div>", unsafe_allow_html=True)
     
     st.markdown("<hr>", unsafe_allow_html=True)
     with st.container(border=True):
         st.markdown(generate_expert_summary(ticker_name, comp_info, fin_df, cons_data, tech, inv_detail_df))
+    
+    # 레이더 차트 & 지표별 점수 UI 추가
+    rc1, rc2 = st.columns([1, 1])
+    with rc1:
+        st.markdown("#### 📡 종합 지표 레이더")
+        categories = ['기관수급', '모멘텀지표', '추세강도', '변동성리스크', '거래량모멘텀', '외국인수급']
+        values = [radar_scores[c] for c in categories]
+        
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(
+            r=values + [values[0]],
+            theta=categories + [categories[0]],
+            fill='toself',
+            fillcolor='rgba(59, 130, 246, 0.2)',
+            line=dict(color='#3b82f6', width=2),
+            marker=dict(size=6, color='#60a5fa')
+        ))
+        fig_radar.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='rgba(255,255,255,0.1)', gridcolor='rgba(255,255,255,0.1)'),
+                angularaxis=dict(linecolor='rgba(255,255,255,0.1)', gridcolor='rgba(255,255,255,0.1)')
+            ),
+            showlegend=False,
+            template='plotly_dark',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=40, r=40, t=20, b=20),
+            height=350,
+            dragmode=False
+        )
+        st.plotly_chart(fig_radar, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
+        
+    with rc2:
+        st.markdown("#### 📊 지표별 세부 점수")
+        st.markdown("<div style='height:350px; overflow-y:auto; padding-right:10px;'>", unsafe_allow_html=True)
+        for cat in categories:
+            score_val = radar_scores[cat]
+            color = "#10b981" if score_val >= 80 else "#f59e0b" if score_val >= 50 else "#ef4444"
+            icon = "📊"
+            if cat == '추세강도': icon = "📈"
+            elif cat == '모멘텀지표': icon = "⚡"
+            elif cat == '기관수급': icon = "🏢"
+            elif cat == '외국인수급': icon = "🌍"
+            elif cat == '거래량모멘텀': icon = "💥"
+            elif cat == '변동성리스크': icon = "🛡️"
+            
+            st.markdown(f"""
+            <div style="background:rgba(30,41,59,0.5); border:1px solid rgba(148,163,184,0.2); border-radius:10px; padding:12px; margin-bottom:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                    <span style="font-weight:bold; font-size:1.05rem;">{icon} {cat}</span>
+                    <span style="font-weight:bold; font-size:1.1rem; color:{color};">{score_val}점</span>
+                </div>
+                <div style="background:rgba(255,255,255,0.1); border-radius:5px; height:8px; width:100%;">
+                    <div style="background:{color}; width:{score_val}%; height:100%; border-radius:5px;"></div>
+                </div>
+                <div style="margin-top:6px; font-size:0.85rem; color:gray;">{radar_details[cat]}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        
     st.markdown("<hr>", unsafe_allow_html=True)
     
     # 1. 기업개요
@@ -181,8 +317,8 @@ def render_detail_analysis(ticker, ticker_name, base_date, engine):
                         fig1.add_trace(go.Bar(x=years, y=fin_df.loc['매출액'].apply(safe_float), name='매출액', marker_color='#93c5fd'))
                     if '영업이익' in fin_df.index:
                         fig1.add_trace(go.Bar(x=years, y=fin_df.loc['영업이익'].apply(safe_float), name='영업이익', marker_color='#fca5a5'))
-                    fig1.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), showlegend=False, template='plotly_dark')
-                    st.plotly_chart(fig1, use_container_width=True)
+                    fig1.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), showlegend=False, template='plotly_dark', dragmode=False)
+                    st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
 
             with col2:
                 with st.container(border=True):
@@ -192,8 +328,8 @@ def render_detail_analysis(ticker, ticker_name, base_date, engine):
                         fig2.add_trace(go.Scatter(x=years, y=fin_df.loc['ROE(지배주주)'].apply(safe_float), name='ROE', line=dict(color='#ef4444', width=2)))
                     if '영업이익률' in fin_df.index:
                         fig2.add_trace(go.Scatter(x=years, y=fin_df.loc['영업이익률'].apply(safe_float), name='영업이익률', line=dict(color='#10b981', width=2)))
-                    fig2.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), showlegend=False, template='plotly_dark')
-                    st.plotly_chart(fig2, use_container_width=True)
+                    fig2.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), showlegend=False, template='plotly_dark', dragmode=False)
+                    st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
 
             with col3:
                 with st.container(border=True):
@@ -201,8 +337,8 @@ def render_detail_analysis(ticker, ticker_name, base_date, engine):
                     fig3 = go.Figure()
                     if '부채비율' in fin_df.index:
                         fig3.add_trace(go.Scatter(x=years, y=fin_df.loc['부채비율'].apply(safe_float), name='부채비율', fill='tozeroy', marker_color='#8b5cf6'))
-                    fig3.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), showlegend=False, template='plotly_dark')
-                    st.plotly_chart(fig3, use_container_width=True)
+                    fig3.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), showlegend=False, template='plotly_dark', dragmode=False)
+                    st.plotly_chart(fig3, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
         except Exception as e:
             st.error("재무 차트 렌더링 중 오류가 발생했습니다.")
     else:
@@ -241,8 +377,8 @@ def render_detail_analysis(ticker, ticker_name, base_date, engine):
         fig_inv = make_subplots(specs=[[{"secondary_y": True}]])
         fig_inv.add_trace(go.Bar(x=inv_detail_df.index, y=inv_detail_df['외국인합계'], name='외국인 (일별)', marker_color='#3b82f6', opacity=0.5), secondary_y=False)
         fig_inv.add_trace(go.Scatter(x=inv_detail_df.index, y=inv_detail_df['기관_누적'], name='기관 (누적)', line=dict(color='#ef4444', width=2)), secondary_y=True)
-        fig_inv.update_layout(height=400, template='plotly_dark', margin=dict(l=0, r=0, t=30, b=0), hovermode='x unified')
-        st.plotly_chart(fig_inv, use_container_width=True)
+        fig_inv.update_layout(height=400, template='plotly_dark', margin=dict(l=0, r=0, t=30, b=0), hovermode='x unified', dragmode=False)
+        st.plotly_chart(fig_inv, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
         
         # 합계 테이블
         st.markdown("**기간별 누적 순매수 대금 / 수량**")
@@ -282,8 +418,8 @@ def render_detail_analysis(ticker, ticker_name, base_date, engine):
         increasing_line_color='#ef4444', decreasing_line_color='#3b82f6'
     ))
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='#8b5cf6', width=2), name='20일선'))
-    fig.update_layout(height=400, xaxis_rangeslider_visible=False, template='plotly_dark', margin=dict(l=0, r=0, t=10, b=0))
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(height=400, xaxis_rangeslider_visible=False, template='plotly_dark', margin=dict(l=0, r=0, t=10, b=0), dragmode=False)
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
 
     if tech:
         strategy = generate_trading_strategy(df, current_price, tech['RSI'], tech['추세'])
@@ -421,8 +557,8 @@ def render_etf_analysis(ticker, ticker_name, base_date, engine):
             st.dataframe(h_df, use_container_width=True, hide_index=True)
         with col2:
             fig_pie = go.Figure(data=[go.Pie(labels=h_df['구성종목'], values=h_df['비중'].str.replace('%','').astype(float), hole=.3, textinfo='label+percent')])
-            fig_pie.update_layout(height=350, margin=dict(l=0, r=0, t=0, b=0), template='plotly_dark', showlegend=False)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            fig_pie.update_layout(height=350, margin=dict(l=0, r=0, t=0, b=0), template='plotly_dark', showlegend=False, dragmode=False)
+            st.plotly_chart(fig_pie, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
     else:
         st.info("구성 종목 정보를 불러올 수 없습니다.")
 
@@ -437,8 +573,8 @@ def render_etf_analysis(ticker, ticker_name, base_date, engine):
             fig.add_trace(go.Scatter(x=df.index, y=df['종가'], name='종가', line=dict(color='#60a5fa', width=2)))
             if 'MA20' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20일선', line=dict(color='#f472b6', width=1)))
             if 'MA60' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], name='60일선', line=dict(color='#a78bfa', width=1)))
-            fig.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), template='plotly_dark')
-            st.plotly_chart(fig, use_container_width=True)
+            fig.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), template='plotly_dark', dragmode=False)
+            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
             
     with t_col2:
         with st.container(border=True):
@@ -456,8 +592,8 @@ def render_etf_analysis(ticker, ticker_name, base_date, engine):
                 fig_inv.add_trace(go.Scatter(x=recent.index, y=recent['외국인_누적'], name='외국인', line=dict(color='#f43f5e')))
                 fig_inv.add_trace(go.Scatter(x=recent.index, y=recent['기관_누적'], name='기관', line=dict(color='#3b82f6')))
                 fig_inv.add_trace(go.Scatter(x=recent.index, y=recent['개인_누적'], name='개인', line=dict(color='#10b981')))
-                fig_inv.update_layout(height=200, margin=dict(l=0, r=0, t=10, b=0), showlegend=False, template='plotly_dark')
-                st.plotly_chart(fig_inv, use_container_width=True)
+                fig_inv.update_layout(height=200, margin=dict(l=0, r=0, t=10, b=0), showlegend=False, template='plotly_dark', dragmode=False)
+                st.plotly_chart(fig_inv, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
             else:
                 st.info("수급 데이터 없음")
 
